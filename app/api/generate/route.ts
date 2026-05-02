@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai"
 import type { StreamEvent, GeneratedContent } from "@/lib/types"
 import { saveGeneration } from "@/lib/mongodb"
 
+// Signal AI Content Generator - Using Google Gemini 1.5 Flash
 // Initialize Google Generative AI
 function getClient() {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
@@ -19,7 +20,7 @@ async function callGemini(
 ) {
   const client = getClient()
   const model = client.getGenerativeModel({
-    model: "gemini-2.0-flash-exp",
+    model: "gemini-1.5-flash",
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: schema as object
@@ -351,7 +352,98 @@ Write like a human who has something real to say, not a content creator followin
 
       await emit({ type: "content_ready", platform: "linkedin", content: result.linkedin })
       await emit({ type: "content_ready", platform: "twitter", content: result.twitter })
-      await emit({ type: "complete", result })
+
+      // ===== CRITIC AGENT: Brutal honest feedback from AI critics =====
+      const criticStart = Date.now()
+      await emit({ type: "agent_start", agent: "critic", timestamp: new Date().toISOString() })
+      await emit({ type: "agent_thinking", agent: "critic", message: "Summoning the critics..." })
+
+      const critics = [
+        { id: "brutus", name: "Brutus", personality: "harsh realist who tears apart weak content" },
+        { id: "viral-vera", name: "Viral Vera", personality: "algorithm expert who knows what spreads" },
+        { id: "skeptical-sam", name: "Skeptical Sam", personality: "devil's advocate who finds fatal flaws" },
+        { id: "engagement-emma", name: "Engagement Emma", personality: "audience expert who knows what hooks people" }
+      ]
+
+      const CriticSchema = {
+        type: "object" as const,
+        properties: {
+          opinions: {
+            type: "array" as const,
+            items: {
+              type: "object" as const,
+              properties: {
+                agentId: { type: "string" as const },
+                verdict: { type: "string" as const, enum: ["viral", "solid", "meh", "skip"] },
+                score: { type: "number" as const },
+                reasoning: { type: "string" as const },
+                suggestion: { type: "string" as const },
+                viralPotential: { type: "number" as const }
+              },
+              required: ["agentId", "verdict", "score", "reasoning", "suggestion", "viralPotential"]
+            }
+          }
+        },
+        required: ["opinions"]
+      }
+
+      const criticPrompt = `You are simulating 4 brutally honest AI content critics reviewing a LinkedIn post and Twitter thread.
+
+THE CONTENT TO REVIEW:
+
+LINKEDIN POST:
+${result.linkedin.content}
+
+TWITTER THREAD:
+${result.twitter.tweets.map(t => `Tweet ${t.number}: ${t.content}`).join('\n\n')}
+
+THE CRITICS (give each a unique voice and perspective):
+
+1. "brutus" - Brutus the Harsh Realist: Tears apart weak content, respects only raw authenticity. Hates fluff, clichés, and "LinkedIn bro" energy. Very critical.
+
+2. "viral-vera" - Viral Vera: The Algorithm Whisperer. Knows what makes content spread. Focuses on hooks, scroll-stopping power, shareability. Optimistic but realistic.
+
+3. "skeptical-sam" - Skeptical Sam: The Devil's Advocate. Challenges every assumption, finds fatal flaws in the argument. Asks "why would anyone care?"
+
+4. "engagement-emma" - Engagement Emma: The Audience Expert. Knows what hooks people emotionally, what drives comments and saves. Focuses on human connection.
+
+For each critic, provide:
+- verdict: "viral" (this will blow up), "solid" (good but not special), "meh" (forgettable), or "skip" (don't post this)
+- score: 1-100 overall quality
+- reasoning: 1-2 sentences of their brutally honest take IN THEIR VOICE
+- suggestion: One specific improvement they'd make
+- viralPotential: 0-100 chance this goes viral
+
+Be BRUTALLY HONEST. Creators need real feedback, not encouragement. If the content is generic or boring, SAY SO.`
+
+      await emit({ type: "agent_thinking", agent: "critic", message: "Critics are debating..." })
+
+      interface CriticOutput {
+        opinions: Array<{
+          agentId: string
+          verdict: "viral" | "solid" | "meh" | "skip"
+          score: number
+          reasoning: string
+          suggestion: string
+          viralPotential: number
+        }>
+      }
+
+      const criticOutput: CriticOutput = await callGemini(criticPrompt, CriticSchema)
+
+      // Emit each opinion as it comes in (simulated streaming)
+      for (const opinion of criticOutput.opinions) {
+        const critic = critics.find(c => c.id === opinion.agentId)
+        await emit({ type: "agent_thinking", agent: "critic", message: `${critic?.name || opinion.agentId}: "${opinion.reasoning}"` })
+        await emit({ type: "critic_opinion", opinion })
+        // Small delay for dramatic effect
+        await new Promise(resolve => setTimeout(resolve, 300))
+      }
+
+      await emit({ type: "agent_output", agent: "critic", output: criticOutput })
+      await emit({ type: "agent_complete", agent: "critic", duration: Date.now() - criticStart })
+
+      await emit({ type: "complete", result, critics: criticOutput.opinions })
 
       // Save to MongoDB for learning
       const inputType = voice && media ? "voice+image" : voice ? "voice" : media ? "image" : "text"

@@ -15,6 +15,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import type { UploadedMedia, VoiceRecording } from "@/lib/types"
 import { Flame, Terminal, AlertCircle, ExternalLink, Zap } from "lucide-react"
 import { YourSignalSidebar } from "@/components/sidebar/your-signal"
+import { CriticArena } from "@/components/agents/critic-arena"
 
 export default function SignalPage() {
   const [voice, setVoice] = useState<VoiceRecording | null>(null)
@@ -22,7 +23,7 @@ export default function SignalPage() {
   const [context, setContext] = useState("")
   const [activeTab, setActiveTab] = useState("linkedin")
   
-  const { status, logs, content, activeAgent, error, generate, reset } = useGenerate()
+  const { status, logs, content, activeAgent, error, critics, generate, reset } = useGenerate()
 
   const isGenerating = status === "streaming"
   const hasContent = status === "complete" && content !== null
@@ -229,6 +230,15 @@ export default function SignalPage() {
                   </svg>
                   Twitter
                 </TabsTrigger>
+                <TabsTrigger value="critics" className="gap-2 data-[state=active]:bg-background">
+                  <svg className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                  Critics
+                </TabsTrigger>
                 <TabsTrigger value="log" className="gap-2 data-[state=active]:bg-background md:hidden">
                   <Terminal className="size-4" />
                   Log
@@ -242,6 +252,15 @@ export default function SignalPage() {
             
             <TabsContent value="twitter" className="flex-1 m-0 overflow-auto">
               <TwitterView content={content} isLoading={isGenerating} />
+            </TabsContent>
+            
+            <TabsContent value="critics" className="flex-1 m-0 overflow-auto p-6">
+              <CriticArena 
+                opinions={critics}
+                isDebating={isGenerating && activeAgent === "critic"}
+                linkedinContent={content?.linkedin.content}
+                twitterContent={content?.twitter.tweets.map(t => t.content).join('\n\n')}
+              />
             </TabsContent>
             
             <TabsContent value="log" className="flex-1 m-0 overflow-hidden md:hidden">

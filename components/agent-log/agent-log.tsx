@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { LogEntry, AgentName } from "@/lib/types"
-import { Eye, Lightbulb, TrendingUp, Zap, PenTool, Check, Loader2, AlertCircle } from "lucide-react"
+import { Eye, Lightbulb, TrendingUp, Zap, PenTool, Check, Loader2, AlertCircle, Users } from "lucide-react"
 
 interface AgentLogProps {
   entries: LogEntry[]
@@ -41,6 +41,11 @@ const agentConfig: Record<AgentName, {
     icon: PenTool, 
     label: "COPY",
     colorClass: "text-emerald-400"
+  },
+  critic: {
+    icon: Users,
+    label: "CRITICS",
+    colorClass: "text-orange-400"
   }
 }
 

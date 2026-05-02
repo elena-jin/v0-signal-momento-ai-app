@@ -15,7 +15,10 @@ export async function getDb(): Promise<Db | null> {
   if (db) return db
   
   try {
-    client = new MongoClient(MONGODB_URI)
+    client = new MongoClient(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000, // 5 second timeout
+      connectTimeoutMS: 5000
+    })
     await client.connect()
     db = client.db("signal")
     return db

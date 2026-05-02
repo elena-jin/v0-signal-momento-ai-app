@@ -1,4 +1,22 @@
-export type AgentName = "capture" | "insight" | "trend" | "angle" | "copy"
+export type AgentName = "capture" | "insight" | "trend" | "angle" | "copy" | "critic"
+
+export interface CriticAgent {
+  id: string
+  name: string
+  avatar: string
+  personality: string
+  color: string
+  position: { x: number; y: number }
+}
+
+export interface CriticOpinion {
+  agentId: string
+  verdict: "viral" | "solid" | "meh" | "skip"
+  score: number
+  reasoning: string
+  suggestion: string
+  viralPotential: number
+}
 
 export interface UploadedMedia {
   id: string
@@ -104,7 +122,8 @@ export type StreamEvent =
   | { type: "agent_output"; agent: AgentName; output: unknown }
   | { type: "agent_complete"; agent: AgentName; duration: number }
   | { type: "content_ready"; platform: "linkedin" | "twitter"; content: unknown }
-  | { type: "complete"; result: GeneratedContent }
+  | { type: "critic_opinion"; opinion: CriticOpinion }
+  | { type: "complete"; result: GeneratedContent; critics?: CriticOpinion[] }
   | { type: "error"; message: string; agent?: AgentName }
 
 export type GenerateStatus = "idle" | "recording" | "processing" | "streaming" | "complete" | "error"

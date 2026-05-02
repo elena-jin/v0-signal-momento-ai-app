@@ -8,18 +8,24 @@ import type {
   UploadedMedia, 
   VoiceRecording,
   GeneratedContent,
-  AgentName 
+  AgentName,
+  CriticOpinion
 } from "@/lib/types"
 
-const initialState: GenerateState = {
+interface ExtendedGenerateState extends GenerateState {
+  critics: CriticOpinion[]
+}
+
+const initialState: ExtendedGenerateState = {
   status: "idle",
   logs: [],
   content: null,
-  activeAgent: null
+  activeAgent: null,
+  critics: []
 }
 
 export function useGenerate() {
-  const [state, setState] = useState<GenerateState>(initialState)
+  const [state, setState] = useState<ExtendedGenerateState>(initialState)
 
   const generate = useCallback(async (
     voice: VoiceRecording | null, 
@@ -33,7 +39,8 @@ export function useGenerate() {
       status: "streaming",
       logs: [],
       content: null,
-      activeAgent: null
+      activeAgent: null,
+      critics: []
     })
 
     try {
@@ -129,7 +136,7 @@ export function useGenerate() {
 
 function handleStreamEvent(
   event: StreamEvent, 
-  setState: React.Dispatch<React.SetStateAction<GenerateState>>
+  setState: React.Dispatch<React.SetStateAction<ExtendedGenerateState>>
 ) {
   switch (event.type) {
     case "agent_start":
@@ -162,6 +169,13 @@ function handleStreamEvent(
       break
 
     case "content_ready":
+      break
+
+    case "critic_opinion":
+      setState(prev => ({
+        ...prev,
+        critics: [...prev.critics, event.opinion]
+      }))
       break
 
     case "complete":
