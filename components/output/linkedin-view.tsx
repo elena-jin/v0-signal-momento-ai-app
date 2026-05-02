@@ -169,7 +169,7 @@ export function LinkedInView({ content, isLoading }: LinkedInViewProps) {
         
         {/* Character count */}
         <p className="text-xs text-muted-foreground text-center mt-4">
-          {content.linkedin.characterCount.toLocaleString()} characters
+          {(content.linkedin.characterCount ?? content.linkedin.content?.length ?? 0).toLocaleString()} characters
         </p>
       </div>
     </div>
