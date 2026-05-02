@@ -21,10 +21,8 @@ export function MediaUpload({ media, onMediaChange, disabled }: MediaUploadProps
     
     if (!isVideo && !isImage) return
     
-    // Create preview URL
     const preview = URL.createObjectURL(file)
     
-    // Convert to base64
     const reader = new FileReader()
     reader.onload = () => {
       const data = (reader.result as string).split(",")[1]
@@ -77,7 +75,7 @@ export function MediaUpload({ media, onMediaChange, disabled }: MediaUploadProps
   }, [media, onMediaChange])
 
   return (
-    <div className="flex flex-col items-center gap-4">
+    <div className="flex flex-col">
       <input
         ref={inputRef}
         type="file"
@@ -93,12 +91,13 @@ export function MediaUpload({ media, onMediaChange, disabled }: MediaUploadProps
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         className={cn(
-          "relative flex flex-col items-center justify-center w-full aspect-square rounded-xl border-2 border-dashed transition-all cursor-pointer overflow-hidden",
+          "relative flex flex-col items-center justify-center aspect-[4/3] rounded-xl border-2 border-dashed transition-all cursor-pointer overflow-hidden",
+          "glassmorphic",
           isDragging 
             ? "border-primary bg-primary/10" 
             : media 
-              ? "border-primary/50 bg-primary/5"
-              : "border-muted-foreground/30 bg-muted/30 hover:border-muted-foreground/50 hover:bg-muted/50",
+              ? "border-primary/50"
+              : "border-border/50 hover:border-primary/30 hover:bg-primary/5",
           disabled && "opacity-50 cursor-not-allowed"
         )}
       >
@@ -140,11 +139,11 @@ export function MediaUpload({ media, onMediaChange, disabled }: MediaUploadProps
         ) : (
           <div className="flex flex-col items-center gap-3 p-6">
             <div className={cn(
-              "p-4 rounded-full",
-              isDragging ? "bg-primary/20" : "bg-muted"
+              "p-3 rounded-lg border border-dashed",
+              isDragging ? "border-primary bg-primary/10" : "border-border/50"
             )}>
               <Upload className={cn(
-                "size-8",
+                "size-6",
                 isDragging ? "text-primary" : "text-muted-foreground"
               )} />
             </div>
@@ -155,11 +154,6 @@ export function MediaUpload({ media, onMediaChange, disabled }: MediaUploadProps
           </div>
         )}
       </div>
-      
-      {/* Status */}
-      <p className="text-sm text-muted-foreground">
-        {media ? "Click to change" : "Photo or video"}
-      </p>
     </div>
   )
 }
