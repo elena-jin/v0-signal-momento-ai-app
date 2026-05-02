@@ -3,10 +3,10 @@
 import { useState, useCallback } from "react"
 import type { 
   GenerateState, 
-  GenerateStatus, 
   LogEntry, 
   StreamEvent, 
-  UploadedImage, 
+  UploadedMedia, 
+  VoiceRecording,
   GeneratedContent,
   AgentName 
 } from "@/lib/types"
@@ -21,8 +21,14 @@ const initialState: GenerateState = {
 export function useGenerate() {
   const [state, setState] = useState<GenerateState>(initialState)
 
-  const generate = useCallback(async (images: UploadedImage[], context?: string) => {
-    // Reset state
+  const generate = useCallback(async (
+    voice: VoiceRecording | null, 
+    media: UploadedMedia | null, 
+    context?: string
+  ) => {
+    // Need at least voice or media
+    if (!voice && !media) return
+
     setState({
       status: "streaming",
       logs: [],
@@ -31,16 +37,35 @@ export function useGenerate() {
     })
 
     try {
-      const imageData = images.map(img => ({
-        data: img.data!,
-        type: img.file.type,
-        name: img.file.name
-      }))
+      // Prepare voice data
+      let voiceData: { data: string; duration: number } | undefined
+      if (voice) {
+        const reader = new FileReader()
+        const voiceBase64 = await new Promise<string>((resolve) => {
+          reader.onload = () => resolve((reader.result as string).split(",")[1])
+          reader.readAsDataURL(voice.blob)
+        })
+        voiceData = { data: voiceBase64, duration: voice.duration }
+      }
+
+      // Prepare media data
+      let mediaData: { data: string; type: string; mediaType: "image" | "video" } | undefined
+      if (media && media.data) {
+        mediaData = { 
+          data: media.data, 
+          type: media.file.type, 
+          mediaType: media.type 
+        }
+      }
 
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images: imageData, context })
+        body: JSON.stringify({ 
+          voice: voiceData, 
+          media: mediaData, 
+          context 
+        })
       })
 
       if (!response.ok) {
@@ -76,7 +101,7 @@ export function useGenerate() {
         }
       }
 
-      // Process any remaining buffer
+      // Process remaining buffer
       if (buffer.startsWith("data: ")) {
         try {
           const data = JSON.parse(buffer.slice(6)) as StreamEvent
@@ -132,12 +157,11 @@ function handleStreamEvent(
     case "agent_complete":
       setState(prev => ({
         ...prev,
-        logs: [...prev.logs, createLogEntry(event.agent, "complete", `Completed in ${(event.duration / 1000).toFixed(1)}s`, event.duration)]
+        logs: [...prev.logs, createLogEntry(event.agent, "complete", `Done`, event.duration)]
       }))
       break
 
     case "content_ready":
-      // Content is ready for a specific platform
       break
 
     case "complete":

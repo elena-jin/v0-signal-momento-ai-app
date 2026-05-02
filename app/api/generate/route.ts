@@ -1,110 +1,76 @@
-import { streamText, Output, wrapLanguageModel } from "ai"
-import { mubitMemoryMiddleware } from "@mubit-ai/ai-sdk"
+import { streamText, Output } from "ai"
 import { z } from "zod"
-import type { StreamEvent, VisionAnalysis, NarrativeOutput, TrendOutput, GeneratedContent } from "@/lib/types"
+import type { StreamEvent, GeneratedContent } from "@/lib/types"
+
+// Model to use for AI calls
+const MODEL = "anthropic/claude-sonnet-4-20250514"
 
 // Schemas for structured output
-const VisionSchema = z.object({
-  images: z.array(z.object({
-    index: z.number(),
+const CaptureSchema = z.object({
+  transcription: z.string().nullable(),
+  imageAnalysis: z.object({
     description: z.string(),
     subjects: z.array(z.string()),
     mood: z.string(),
-    colors: z.array(z.string()),
     setting: z.string(),
-    activity: z.string(),
-    emotionalTone: z.string()
-  })),
-  overallTheme: z.string(),
-  suggestedNarrative: z.string(),
-  contentCategory: z.string() // For trend agent
+    activity: z.string()
+  }).nullable(),
+  rawThought: z.string(),
+  contentCategory: z.string()
 })
 
-const NarrativeSchema = z.object({
-  storyArc: z.string(),
-  emotionalJourney: z.string(),
-  keyThemes: z.array(z.string()),
-  tone: z.enum(["playful", "inspirational", "reflective", "energetic", "intimate"]),
-  hooks: z.array(z.string()),
-  callToAction: z.string()
+const InsightSchema = z.object({
+  coreIdea: z.string(),
+  uniqueAngle: z.string(),
+  emotionalHook: z.string(),
+  targetAudience: z.string(),
+  strengthScore: z.number()
 })
 
 const TrendSchema = z.object({
   category: z.string(),
-  trendingHashtags: z.array(z.string()),
-  recommendedHashtags: z.array(z.string()),
-  trendScore: z.number(),
-  insights: z.string()
+  headlines: z.array(z.string()),
+  trendingTopics: z.array(z.string()),
+  relevantHashtags: z.array(z.string()),
+  timingInsight: z.string()
+})
+
+const AngleSchema = z.object({
+  freshTake: z.string(),
+  contrarian: z.string(),
+  personalConnection: z.string(),
+  recommendedAngle: z.string(),
+  reasoning: z.string()
 })
 
 const CopySchema = z.object({
-  instagram: z.object({
-    caption: z.string(),
-    hashtags: z.array(z.string())
+  linkedin: z.object({
+    content: z.string(),
+    hook: z.string(),
+    cta: z.string()
   }),
   twitter: z.object({
-    thread: z.array(z.string()).length(5)
-  }),
-  stories: z.array(z.object({
-    imageIndex: z.number(),
-    caption: z.string(),
-    sticker: z.string()
-  }))
-})
-
-const FormatSchema = z.object({
-  instagram: z.object({
-    caption: z.string(),
-    hashtags: z.string(),
-    characterCount: z.number()
-  }),
-  twitter: z.object({
-    tweets: z.array(z.object({
+    thread: z.array(z.object({
       number: z.number(),
       content: z.string(),
-      characterCount: z.number()
+      hashtags: z.array(z.string())
     }))
-  }),
-  stories: z.array(z.object({
-    imageIndex: z.number(),
-    caption: z.string(),
-    suggestedSticker: z.string(),
-    placement: z.enum(["top", "center", "bottom"])
-  }))
+  })
 })
 
-// Create model with Mubit memory middleware
-function createMemoryModel() {
-  const baseModel = "anthropic/claude-sonnet-4-20250514"
-  
-  // Only wrap with Mubit if API key is available
-  if (process.env.MUBIT_API_KEY) {
-    return wrapLanguageModel({
-      model: baseModel,
-      middleware: mubitMemoryMiddleware({
-        apiKey: process.env.MUBIT_API_KEY,
-        sessionId: "momento-content-agent"
-      })
-    })
-  }
-  
-  return baseModel
-}
-
-// Fetch trending hashtags from Bright Data
-async function fetchTrendingHashtags(category: string, emit: (event: StreamEvent) => Promise<void>): Promise<string[]> {
+// Fetch trending topics from Bright Data
+async function fetchTrendingTopics(category: string, emit: (event: StreamEvent) => Promise<void>): Promise<{ headlines: string[], topics: string[] }> {
   const apiKey = process.env.BRIGHT_DATA_API_KEY
   
   if (!apiKey) {
-    await emit({ type: "agent_thinking", agent: "trend", message: "Bright Data API key not configured, using AI-generated trends..." })
-    return []
+    await emit({ type: "agent_thinking", agent: "trend", message: "No Bright Data key, using AI trend analysis..." })
+    return { headlines: [], topics: [] }
   }
   
   try {
-    await emit({ type: "agent_thinking", agent: "trend", message: `Fetching real-time trends for "${category}"...` })
+    await emit({ type: "agent_thinking", agent: "trend", message: `Scanning founder Twitter for ${category} discussions...` })
     
-    // Call Bright Data's Social Media API for trending hashtags
-    // Using Instagram hashtag discovery endpoint
+    // Call Bright Data's social media API for trending content
     const response = await fetch("https://api.brightdata.com/datasets/v3/trigger", {
       method: "POST",
       headers: {
@@ -112,45 +78,52 @@ async function fetchTrendingHashtags(category: string, emit: (event: StreamEvent
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        dataset_id: "gd_lyclg6rwlk1vfnl81", // Instagram hashtag dataset
-        endpoint: "/hashtag/discover",
-        input: [{ keyword: category }],
+        dataset_id: "gd_lwdb4vjm1ehb499uxs",
+        endpoint: "/search/posts",
+        input: [{ 
+          keyword: `${category} founder startup`,
+          sort_by: "Top"
+        }],
         format: "json",
-        limit: 20
+        limit: 10
       })
     })
     
     if (!response.ok) {
-      await emit({ type: "agent_thinking", agent: "trend", message: "API request failed, falling back to AI trends..." })
-      return []
+      await emit({ type: "agent_thinking", agent: "trend", message: "API unavailable, using cached trends..." })
+      return { headlines: [], topics: [] }
     }
     
     const data = await response.json()
     
-    // Extract hashtags from Bright Data response
     if (data && Array.isArray(data.results)) {
-      const hashtags = data.results
-        .filter((item: { hashtag?: string }) => item.hashtag)
-        .map((item: { hashtag: string }) => item.hashtag)
-        .slice(0, 15)
+      const headlines = data.results
+        .filter((item: { text?: string }) => item.text)
+        .map((item: { text: string }) => item.text.slice(0, 100))
+        .slice(0, 5)
       
-      if (hashtags.length > 0) {
-        await emit({ type: "agent_thinking", agent: "trend", message: `Found ${hashtags.length} trending hashtags from Bright Data` })
-        return hashtags
+      const topics = data.results
+        .flatMap((item: { hashtags?: string[] }) => item.hashtags || [])
+        .slice(0, 10)
+      
+      if (headlines.length > 0) {
+        await emit({ type: "agent_thinking", agent: "trend", message: `Found ${headlines.length} relevant posts from this week` })
+        return { headlines, topics }
       }
     }
     
-    return []
+    return { headlines: [], topics: [] }
   } catch (error) {
-    console.error("[v0] Bright Data API error:", error)
-    await emit({ type: "agent_thinking", agent: "trend", message: "Error fetching trends, using AI-generated trends..." })
-    return []
+    console.error("[v0] Bright Data error:", error)
+    await emit({ type: "agent_thinking", agent: "trend", message: "Falling back to AI trend synthesis..." })
+    return { headlines: [], topics: [] }
   }
 }
 
 export async function POST(req: Request) {
-  const { images, context } = await req.json() as {
-    images: Array<{ data: string; type: string; name: string }>
+  const { voice, media, context } = await req.json() as {
+    voice?: { data: string; duration: number }
+    media?: { data: string; type: string; mediaType: "image" | "video" }
     context?: string
   }
 
@@ -163,262 +136,254 @@ export async function POST(req: Request) {
   }
 
   const startTime = Date.now()
-  const model = createMemoryModel()
 
   ;(async () => {
     try {
-      // ====== VISION AGENT ======
-      await emit({ type: "agent_start", agent: "vision", timestamp: new Date().toISOString() })
-      await emit({ type: "agent_thinking", agent: "vision", message: "Analyzing uploaded images..." })
+      // ====== CAPTURE AGENT ======
+      await emit({ type: "agent_start", agent: "capture", timestamp: new Date().toISOString() })
       
-      const visionStart = Date.now()
+      const captureStart = Date.now()
+      let capturePrompt = ""
+      const messageContent: Array<{ type: "text"; text: string } | { type: "image"; image: string; mimeType: string }> = []
       
-      const imageContents = images.map((img) => ({
-        type: "image" as const,
-        image: img.data,
-        mimeType: img.type
-      }))
-      
-      await emit({ type: "agent_thinking", agent: "vision", message: `Processing ${images.length} image${images.length > 1 ? 's' : ''}...` })
-
-      const visionResult = await streamText({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: [
-              ...imageContents,
-              {
-                type: "text",
-                text: `You are the Vision Agent for Momento, an AI content creation system. Analyze the provided ${images.length} image(s) with extreme attention to detail.
-                
-Extract for each image:
-- Description: A detailed description of what's in the image
-- Subjects: Who/what is in the image (people, objects, animals)
-- Mood: The overall emotional feeling (happy, serene, energetic, etc.)
-- Colors: Dominant colors in the image
-- Setting: Location, environment, time of day
-- Activity: What's happening in the image
-- Emotional Tone: The deeper emotional undertone
-
-Also determine:
-- Overall Theme: A unifying theme across all images
-- Suggested Narrative: A brief story that connects the images
-- Content Category: A single-word category for trend research (e.g., "travel", "food", "fitness", "fashion", "lifestyle", "nature", "tech", "art")
-
-${context ? `User provided context: "${context}"` : "No additional context provided."}
-
-Return your analysis as structured JSON.`
-              }
-            ]
-          }
-        ],
-        output: Output.object({ schema: VisionSchema })
-      })
-      
-      let visionOutput: VisionAnalysis & { contentCategory: string } | null = null
-      for await (const chunk of visionResult.partialOutputStream) {
-        if (chunk && typeof chunk === 'object' && 'images' in chunk) {
-          const img = chunk.images?.[0]
-          if (img?.subjects?.length) {
-            await emit({ 
-              type: "agent_thinking", 
-              agent: "vision", 
-              message: `Detected: ${img.subjects.slice(0, 3).join(', ')}${img.mood ? ` | Mood: ${img.mood}` : ''}` 
-            })
-          }
-        }
+      if (voice) {
+        await emit({ type: "agent_thinking", agent: "capture", message: "Transcribing voice recording..." })
+        capturePrompt += `The user recorded a ${voice.duration} second voice note. Transcribe and capture their raw thought.\n\n`
       }
       
-      const finalVision = await visionResult.output
-      visionOutput = finalVision as VisionAnalysis & { contentCategory: string }
+      if (media) {
+        await emit({ type: "agent_thinking", agent: "capture", message: `Analyzing ${media.mediaType}...` })
+        messageContent.push({
+          type: "image",
+          image: media.data,
+          mimeType: media.type
+        })
+        capturePrompt += `The user uploaded a ${media.mediaType}. Analyze what's in it.\n\n`
+      }
       
-      await emit({ type: "agent_output", agent: "vision", output: visionOutput })
-      await emit({ type: "agent_complete", agent: "vision", duration: Date.now() - visionStart })
-
-      // ====== NARRATIVE AGENT ======
-      await emit({ type: "agent_start", agent: "narrative", timestamp: new Date().toISOString() })
-      await emit({ type: "agent_thinking", agent: "narrative", message: "Constructing story arc from visual analysis..." })
+      if (context) {
+        capturePrompt += `Additional context from user: "${context}"\n\n`
+      }
       
-      const narrativeStart = Date.now()
+      capturePrompt += `You are the Capture Agent for Signal, a voice-first content creation tool.
 
-      const narrativeResult = await streamText({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: `You are the Narrative Agent for Momento. Using the following visual analysis, construct a compelling story arc.
+Your job is to:
+1. ${voice ? "Transcribe and clean up the voice recording (fix filler words, make it coherent)" : "Analyze the visual content"}
+2. Extract the raw thought or idea being communicated
+3. Identify a content category (one of: tech, startup, leadership, product, growth, ai, career, lifestyle, creativity)
 
-Visual Analysis:
-${JSON.stringify(visionOutput, null, 2)}
+Return JSON with:
+- transcription: The cleaned transcription (null if no voice)
+- imageAnalysis: Analysis of the image/video (null if no media)
+- rawThought: The core idea in 1-2 sentences
+- contentCategory: Single word category`
 
-${context ? `User's context: "${context}"` : ""}
+      messageContent.push({ type: "text", text: capturePrompt })
 
-Identify:
-- Story Arc: The narrative journey these images tell
-- Emotional Journey: The emotional progression
-- Key Themes: 3-5 themes that emerge
-- Tone: Choose one - playful, inspirational, reflective, energetic, or intimate
-- Hooks: 2-3 attention-grabbing opening lines
-- Call to Action: A natural CTA that fits the content
-
-Return structured JSON.`
-          }
-        ],
-        output: Output.object({ schema: NarrativeSchema })
+      const captureResult = await streamText({
+        model: MODEL,
+        messages: [{ role: "user", content: messageContent }],
+        output: Output.object({ schema: CaptureSchema })
       })
       
-      let narrativeOutput: NarrativeOutput | null = null
-      for await (const chunk of narrativeResult.partialOutputStream) {
+      for await (const chunk of captureResult.partialOutputStream) {
         if (chunk && typeof chunk === 'object') {
-          if ('keyThemes' in chunk && Array.isArray(chunk.keyThemes) && chunk.keyThemes.length > 0) {
-            await emit({ 
-              type: "agent_thinking", 
-              agent: "narrative", 
-              message: `Themes identified: ${chunk.keyThemes.slice(0, 3).join(', ')}` 
-            })
-          }
-          if ('tone' in chunk && chunk.tone) {
-            await emit({ 
-              type: "agent_thinking", 
-              agent: "narrative", 
-              message: `Tone selected: ${chunk.tone}` 
-            })
+          if ('rawThought' in chunk && chunk.rawThought) {
+            await emit({ type: "agent_thinking", agent: "capture", message: `Captured: "${(chunk.rawThought as string).slice(0, 60)}..."` })
           }
         }
       }
       
-      const finalNarrative = await narrativeResult.output
-      narrativeOutput = finalNarrative as NarrativeOutput
+      const captureOutput = await captureResult.output
+      await emit({ type: "agent_output", agent: "capture", output: captureOutput })
+      await emit({ type: "agent_complete", agent: "capture", duration: Date.now() - captureStart })
+
+      // ====== INSIGHT AGENT ======
+      await emit({ type: "agent_start", agent: "insight", timestamp: new Date().toISOString() })
+      await emit({ type: "agent_thinking", agent: "insight", message: "Extracting your strongest idea..." })
       
-      await emit({ type: "agent_output", agent: "narrative", output: narrativeOutput })
-      await emit({ type: "agent_complete", agent: "narrative", duration: Date.now() - narrativeStart })
+      const insightStart = Date.now()
+
+      const insightResult = await streamText({
+        model: MODEL,
+        messages: [{
+          role: "user",
+          content: `You are the Insight Agent for Signal. Your job is to find the single most powerful idea in someone's raw thought.
+
+Raw capture:
+${JSON.stringify(captureOutput, null, 2)}
+
+Find:
+1. coreIdea: The ONE idea that's most shareable (1 sentence)
+2. uniqueAngle: What makes this perspective different from generic takes
+3. emotionalHook: The emotion that will make people stop scrolling
+4. targetAudience: Who specifically will resonate (be specific, not "entrepreneurs")
+5. strengthScore: 1-100 how strong/original this insight is
+
+Be brutally honest. If the idea is weak, say so. Great content starts with great insights.`
+        }],
+        output: Output.object({ schema: InsightSchema })
+      })
+      
+      for await (const chunk of insightResult.partialOutputStream) {
+        if (chunk && typeof chunk === 'object') {
+          if ('coreIdea' in chunk && chunk.coreIdea) {
+            await emit({ type: "agent_thinking", agent: "insight", message: `Core idea: "${(chunk.coreIdea as string).slice(0, 80)}..."` })
+          }
+          if ('strengthScore' in chunk && typeof chunk.strengthScore === 'number') {
+            await emit({ type: "agent_thinking", agent: "insight", message: `Strength score: ${chunk.strengthScore}/100` })
+          }
+        }
+      }
+      
+      const insightOutput = await insightResult.output
+      await emit({ type: "agent_output", agent: "insight", output: insightOutput })
+      await emit({ type: "agent_complete", agent: "insight", duration: Date.now() - insightStart })
 
       // ====== TREND AGENT ======
       await emit({ type: "agent_start", agent: "trend", timestamp: new Date().toISOString() })
-      await emit({ type: "agent_thinking", agent: "trend", message: `Researching trends for category: ${visionOutput.contentCategory}...` })
+      await emit({ type: "agent_thinking", agent: "trend", message: `Scanning what founders are posting about ${captureOutput.contentCategory}...` })
       
       const trendStart = Date.now()
       
-      // Fetch real trending hashtags from Bright Data
-      const realTrendingHashtags = await fetchTrendingHashtags(visionOutput.contentCategory, emit)
+      // Fetch real trends from Bright Data
+      const realTrends = await fetchTrendingTopics(captureOutput.contentCategory, emit)
       
-      // Use AI to analyze and recommend hashtags based on real data + content
       const trendResult = await streamText({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: `You are the Trend Agent for Momento. Analyze current social media trends for the content category and recommend hashtags.
+        model: MODEL,
+        messages: [{
+          role: "user",
+          content: `You are the Trend Agent for Signal. You scan what founders and thought leaders are discussing RIGHT NOW.
 
-Content Category: ${visionOutput.contentCategory}
-Overall Theme: ${visionOutput.overallTheme}
-Key Themes: ${narrativeOutput.keyThemes.join(', ')}
-Tone: ${narrativeOutput.tone}
+Content category: ${captureOutput.contentCategory}
+Core idea: ${insightOutput.coreIdea}
 
-${realTrendingHashtags.length > 0 
-  ? `Real-time trending hashtags from social media APIs:\n${realTrendingHashtags.map(h => `#${h}`).join(' ')}\n\nUse these ACTUAL trending hashtags as your primary recommendations.` 
-  : `No real-time data available. Generate hashtag recommendations based on current social media best practices for ${visionOutput.contentCategory} content.`}
+${realTrends.headlines.length > 0 
+  ? `LIVE DATA from founder Twitter this week:\n${realTrends.headlines.map((h, i) => `${i + 1}. "${h}"`).join('\n')}\n\nHashtags trending: ${realTrends.topics.join(', ')}`
+  : `No live data available. Generate realistic trending topics for ${captureOutput.contentCategory} based on your knowledge of current discourse.`}
 
 Return:
 - category: The content category
-- trendingHashtags: ${realTrendingHashtags.length > 0 ? 'The actual trending hashtags provided above' : '10-15 currently popular hashtags for this category'}
-- recommendedHashtags: 5-8 hashtags specifically tailored to THIS content combining trends with the unique themes
-- trendScore: A score from 1-100 indicating how trendy/timely this content is
-- insights: A brief insight about why these hashtags will perform well
-
-Return structured JSON.`
-          }
-        ],
+- headlines: 3-5 example headlines/posts that are getting engagement this week (use real data if provided, or generate realistic ones)
+- trendingTopics: 5-8 topics founders are discussing
+- relevantHashtags: 5-10 hashtags that would perform well
+- timingInsight: Why NOW is a good time to post about this (or isn't)`
+        }],
         output: Output.object({ schema: TrendSchema })
       })
       
-      let trendOutput: TrendOutput | null = null
       for await (const chunk of trendResult.partialOutputStream) {
         if (chunk && typeof chunk === 'object') {
-          if ('trendingHashtags' in chunk && Array.isArray(chunk.trendingHashtags) && chunk.trendingHashtags.length > 0) {
-            await emit({ 
-              type: "agent_thinking", 
-              agent: "trend", 
-              message: `Found ${chunk.trendingHashtags.length} trending hashtags` 
-            })
+          if ('headlines' in chunk && Array.isArray(chunk.headlines) && chunk.headlines.length > 0) {
+            await emit({ type: "agent_thinking", agent: "trend", message: `Found trending: "${(chunk.headlines[0] as string).slice(0, 50)}..."` })
           }
-          if ('trendScore' in chunk && typeof chunk.trendScore === 'number') {
-            await emit({ 
-              type: "agent_thinking", 
-              agent: "trend", 
-              message: `Trend score: ${chunk.trendScore}/100` 
-            })
+          if ('timingInsight' in chunk && chunk.timingInsight) {
+            await emit({ type: "agent_thinking", agent: "trend", message: `Timing: ${(chunk.timingInsight as string).slice(0, 60)}...` })
           }
         }
       }
       
-      const finalTrend = await trendResult.output
-      trendOutput = finalTrend as TrendOutput
-      
+      const trendOutput = await trendResult.output
       await emit({ type: "agent_output", agent: "trend", output: trendOutput })
       await emit({ type: "agent_complete", agent: "trend", duration: Date.now() - trendStart })
 
+      // ====== ANGLE AGENT ======
+      await emit({ type: "agent_start", agent: "angle", timestamp: new Date().toISOString() })
+      await emit({ type: "agent_thinking", agent: "angle", message: "Finding the take nobody has posted yet..." })
+      
+      const angleStart = Date.now()
+
+      const angleResult = await streamText({
+        model: MODEL,
+        messages: [{
+          role: "user",
+          content: `You are the Angle Agent for Signal. Your job is to find the UNIQUE angle that will make this post stand out.
+
+Core insight: ${insightOutput.coreIdea}
+Unique angle identified: ${insightOutput.uniqueAngle}
+What's trending: ${trendOutput.headlines.join(', ')}
+Timing: ${trendOutput.timingInsight}
+
+The problem: Most posts say the same thing everyone else says. Your job is to find the contrarian or unexpected angle.
+
+Generate:
+- freshTake: A way to say this that feels new and different
+- contrarian: The opposite of what everyone is saying (even if you don't use it)
+- personalConnection: How to make this feel personal and authentic, not generic
+- recommendedAngle: The specific angle to use (combining freshness + authenticity)
+- reasoning: Why this angle will perform better than the obvious approach
+
+Think like the best writers on Twitter/LinkedIn - what would make YOU stop scrolling?`
+        }],
+        output: Output.object({ schema: AngleSchema })
+      })
+      
+      for await (const chunk of angleResult.partialOutputStream) {
+        if (chunk && typeof chunk === 'object') {
+          if ('recommendedAngle' in chunk && chunk.recommendedAngle) {
+            await emit({ type: "agent_thinking", agent: "angle", message: `Angle: "${(chunk.recommendedAngle as string).slice(0, 70)}..."` })
+          }
+          if ('contrarian' in chunk && chunk.contrarian) {
+            await emit({ type: "agent_thinking", agent: "angle", message: `Contrarian view: "${(chunk.contrarian as string).slice(0, 60)}..."` })
+          }
+        }
+      }
+      
+      const angleOutput = await angleResult.output
+      await emit({ type: "agent_output", agent: "angle", output: angleOutput })
+      await emit({ type: "agent_complete", agent: "angle", duration: Date.now() - angleStart })
+
       // ====== COPY AGENT ======
       await emit({ type: "agent_start", agent: "copy", timestamp: new Date().toISOString() })
-      await emit({ type: "agent_thinking", agent: "copy", message: "Generating platform-specific content with trending hashtags..." })
+      await emit({ type: "agent_thinking", agent: "copy", message: "Writing in your voice..." })
       
       const copyStart = Date.now()
 
-      await emit({ type: "agent_thinking", agent: "copy", message: "Writing Instagram caption..." })
-      
       const copyResult = await streamText({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: `You are the Copy Agent for Momento, a world-class social media copywriter.
+        model: MODEL,
+        messages: [{
+          role: "user",
+          content: `You are the Copy Agent for Signal. You write like the user talks - direct, human, no corporate BS.
 
-Visual Analysis:
-${JSON.stringify(visionOutput, null, 2)}
+CONTEXT:
+- Raw thought: ${captureOutput.rawThought}
+- Core idea: ${insightOutput.coreIdea}
+- Emotional hook: ${insightOutput.emotionalHook}
+- Recommended angle: ${angleOutput.recommendedAngle}
+- Trending hashtags: ${trendOutput.relevantHashtags.join(', ')}
 
-Narrative Direction:
-${JSON.stringify(narrativeOutput, null, 2)}
+WRITE:
 
-Trend Research:
-${JSON.stringify(trendOutput, null, 2)}
+1. LINKEDIN POST (max 3000 chars):
+- Start with a hook that stops the scroll (the first line matters most)
+- Write conversationally, like you're talking to a smart friend
+- Use short paragraphs and line breaks
+- End with a question or call to reflection (not "follow me for more")
+- NO hashtags in LinkedIn body text
+- NO emojis unless absolutely necessary
 
-Generate platform-optimized content:
+2. TWITTER THREAD (4-5 tweets, 280 chars each):
+- Tweet 1: The hook + context (use 🧵 if you want)
+- Tweet 2-4: Build the argument/story
+- Tweet 5: The punchline or takeaway
+- Include 1-2 relevant hashtags per tweet
+- Each tweet should work standalone but connect to the thread
 
-INSTAGRAM:
-- Engaging caption (hook in first line, conversational, strategic line breaks)
-- Use the RECOMMENDED hashtags from the Trend Agent: ${trendOutput.recommendedHashtags.map(h => `#${h}`).join(' ')}
-- Add 3-5 more hashtags from the trending list that fit naturally
-
-TWITTER THREAD:
-- Exactly 5 tweets
-- First tweet hooks and introduces thread (use thread emoji)
-- Each tweet standalone but connected
-- Build narrative momentum
-- Stay under 280 chars per tweet
-- Include 1-2 relevant hashtags per tweet from the trend research
-
-STORIES:
-- One caption per image (${images.length} total)
-- Ultra-short (1-6 words ideal)
-- Suggest a sticker type for each
-
-Tone: ${narrativeOutput.tone}
-
-Return structured JSON.`
-          }
-        ],
+Write like a human who has something real to say, not a content creator following a template.`
+        }],
         output: Output.object({ schema: CopySchema })
       })
       
+      await emit({ type: "agent_thinking", agent: "copy", message: "Drafting LinkedIn post..." })
+      
       for await (const chunk of copyResult.partialOutputStream) {
         if (chunk && typeof chunk === 'object') {
-          if ('instagram' in chunk && chunk.instagram && 'caption' in chunk.instagram) {
-            await emit({ type: "agent_thinking", agent: "copy", message: "Instagram caption drafted..." })
+          if ('linkedin' in chunk && chunk.linkedin && typeof chunk.linkedin === 'object' && 'hook' in chunk.linkedin) {
+            await emit({ type: "agent_thinking", agent: "copy", message: "LinkedIn hook written..." })
           }
-          if ('twitter' in chunk && chunk.twitter && 'thread' in chunk.twitter) {
-            const thread = chunk.twitter.thread
-            if (Array.isArray(thread) && thread.length > 0) {
+          if ('twitter' in chunk && chunk.twitter && typeof chunk.twitter === 'object' && 'thread' in chunk.twitter) {
+            const thread = (chunk.twitter as { thread: unknown[] }).thread
+            if (Array.isArray(thread)) {
               await emit({ type: "agent_thinking", agent: "copy", message: `Twitter thread: ${thread.length}/5 tweets...` })
             }
           }
@@ -426,85 +391,51 @@ Return structured JSON.`
       }
       
       const copyOutput = await copyResult.output
-      
-      await emit({ type: "agent_thinking", agent: "copy", message: "Writing story captions..." })
       await emit({ type: "agent_output", agent: "copy", output: copyOutput })
       await emit({ type: "agent_complete", agent: "copy", duration: Date.now() - copyStart })
 
-      // ====== FORMAT AGENT ======
-      await emit({ type: "agent_start", agent: "format", timestamp: new Date().toISOString() })
-      await emit({ type: "agent_thinking", agent: "format", message: "Structuring final deliverables..." })
-      
-      const formatStart = Date.now()
-
-      const formatResult = await streamText({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: `You are the Format Agent for Momento. Structure the generated copy into final deliverables.
-
-Raw Copy:
-${JSON.stringify(copyOutput, null, 2)}
-
-Format for delivery:
-- Instagram: Include caption, hashtags as single string, and character count
-- Twitter: Array of tweet objects with number (1-5), content, and character count
-- Stories: Array with imageIndex (0-indexed), caption, suggestedSticker, and placement (top/center/bottom)
-
-Ensure all content is polished and ready to use.
-
-Return structured JSON.`
-          }
-        ],
-        output: Output.object({ schema: FormatSchema })
-      })
-      
-      await emit({ type: "agent_thinking", agent: "format", message: "Finalizing Instagram format..." })
-      await emit({ type: "agent_thinking", agent: "format", message: "Finalizing Twitter thread format..." })
-      await emit({ type: "agent_thinking", agent: "format", message: "Finalizing story captions..." })
-      
-      const formatOutput = await formatResult.output
-      
-      await emit({ type: "agent_output", agent: "format", output: formatOutput })
-      await emit({ type: "agent_complete", agent: "format", duration: Date.now() - formatStart })
-
       // Final result
       const result: GeneratedContent = {
-        ...formatOutput,
+        linkedin: {
+          content: copyOutput.linkedin.content,
+          hook: copyOutput.linkedin.hook,
+          cta: copyOutput.linkedin.cta,
+          characterCount: copyOutput.linkedin.content.length
+        },
+        twitter: {
+          tweets: copyOutput.twitter.thread.map(t => ({
+            number: t.number,
+            content: t.content + (t.hashtags.length > 0 ? '\n\n' + t.hashtags.map(h => `#${h}`).join(' ') : ''),
+            characterCount: t.content.length
+          }))
+        },
         metadata: {
           generatedAt: new Date().toISOString(),
-          imageCount: images.length,
-          processingTime: Date.now() - startTime
+          processingTime: Date.now() - startTime,
+          hasVoice: !!voice,
+          hasMedia: !!media
         }
       }
 
-      await emit({ type: "content_ready", platform: "instagram", content: result.instagram })
+      await emit({ type: "content_ready", platform: "linkedin", content: result.linkedin })
       await emit({ type: "content_ready", platform: "twitter", content: result.twitter })
-      await emit({ type: "content_ready", platform: "stories", content: result.stories })
       await emit({ type: "complete", result })
 
     } catch (error) {
       console.error("[v0] Generation error:", error)
       
-      // Provide more helpful error messages
       let errorMessage = "An unexpected error occurred"
       if (error instanceof Error) {
         if (error.message.includes("credit card") || error.message.includes("customer_verification")) {
-          errorMessage = "AI Gateway requires billing setup. Please add a credit card in your Vercel dashboard to unlock AI features."
-        } else if (error.message.includes("MUBIT_API_KEY")) {
-          errorMessage = "Mubit memory is not configured. Set MUBIT_API_KEY in your environment variables."
+          errorMessage = "AI Gateway requires billing setup. Add a credit card in your Vercel dashboard."
         } else if (error.message.includes("rate limit")) {
-          errorMessage = "Rate limit reached. Please wait a moment and try again."
+          errorMessage = "Rate limit reached. Wait a moment and try again."
         } else {
           errorMessage = error.message
         }
       }
       
-      await emit({ 
-        type: "error", 
-        message: errorMessage 
-      })
+      await emit({ type: "error", message: errorMessage })
     } finally {
       await writer.close()
     }

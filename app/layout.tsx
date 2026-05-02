@@ -19,8 +19,8 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Momento - AI Content Agent',
-  description: 'Transform your photos into social media-ready content with AI-powered agents',
+  title: 'Signal - Think out loud. Look brilliant.',
+  description: 'Voice-first AI content agent. Rant into the mic, upload a photo, let Signal cook.',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -42,7 +42,7 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  themeColor: '#0f0a1a',
+  themeColor: '#0a0d14',
   colorScheme: 'dark',
 }
 

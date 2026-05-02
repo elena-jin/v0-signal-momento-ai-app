@@ -1,9 +1,16 @@
-export type AgentName = "vision" | "narrative" | "trend" | "copy" | "format"
+export type AgentName = "capture" | "insight" | "trend" | "angle" | "copy"
 
-export interface UploadedImage {
+export interface UploadedMedia {
   id: string
   file: File
   preview: string
+  data?: string // Base64 encoded
+  type: "image" | "video"
+}
+
+export interface VoiceRecording {
+  blob: Blob
+  duration: number
   data?: string // Base64 encoded
 }
 
@@ -17,57 +24,63 @@ export interface LogEntry {
   duration?: number
 }
 
-export interface VisionAnalysis {
-  images: Array<{
-    index: number
+export interface CaptureOutput {
+  transcription?: string
+  imageAnalysis?: {
     description: string
     subjects: string[]
     mood: string
-    colors: string[]
     setting: string
     activity: string
-    emotionalTone: string
-  }>
-  overallTheme: string
-  suggestedNarrative: string
+  }
+  rawThought: string
+  contentCategory: string
 }
 
-export interface NarrativeOutput {
-  storyArc: string
-  emotionalJourney: string
-  keyThemes: string[]
-  tone: "playful" | "inspirational" | "reflective" | "energetic" | "intimate"
-  hooks: string[]
-  callToAction: string
+export interface InsightOutput {
+  coreIdea: string
+  uniqueAngle: string
+  emotionalHook: string
+  targetAudience: string
+  strengthScore: number
 }
 
 export interface TrendOutput {
   category: string
-  trendingHashtags: string[]
-  recommendedHashtags: string[]
-  trendScore: number
-  insights: string
+  headlines: string[]
+  trendingTopics: string[]
+  relevantHashtags: string[]
+  timingInsight: string
+}
+
+export interface AngleOutput {
+  freshTake: string
+  contrarian: string
+  personalConnection: string
+  recommendedAngle: string
+  reasoning: string
 }
 
 export interface CopyOutput {
-  instagram: {
-    caption: string
-    hashtags: string[]
+  linkedin: {
+    content: string
+    hook: string
+    cta: string
   }
   twitter: {
-    thread: string[]
+    thread: Array<{
+      number: number
+      content: string
+      hashtags: string[]
+    }>
   }
-  stories: Array<{
-    imageIndex: number
-    caption: string
-    sticker: string
-  }>
 }
 
 export interface GeneratedContent {
-  instagram: {
-    caption: string
-    hashtags: string
+  linkedin: {
+    content: string
+    hook: string
+    cta: string
     characterCount: number
   }
   twitter: {
@@ -77,16 +90,11 @@ export interface GeneratedContent {
       characterCount: number
     }>
   }
-  stories: Array<{
-    imageIndex: number
-    caption: string
-    suggestedSticker: string
-    placement: "top" | "center" | "bottom"
-  }>
   metadata: {
     generatedAt: string
-    imageCount: number
     processingTime: number
+    hasVoice: boolean
+    hasMedia: boolean
   }
 }
 
@@ -95,11 +103,11 @@ export type StreamEvent =
   | { type: "agent_thinking"; agent: AgentName; message: string }
   | { type: "agent_output"; agent: AgentName; output: unknown }
   | { type: "agent_complete"; agent: AgentName; duration: number }
-  | { type: "content_ready"; platform: "instagram" | "twitter" | "stories"; content: unknown }
+  | { type: "content_ready"; platform: "linkedin" | "twitter"; content: unknown }
   | { type: "complete"; result: GeneratedContent }
   | { type: "error"; message: string; agent?: AgentName }
 
-export type GenerateStatus = "idle" | "uploading" | "streaming" | "complete" | "error"
+export type GenerateStatus = "idle" | "recording" | "processing" | "streaming" | "complete" | "error"
 
 export interface GenerateState {
   status: GenerateStatus
