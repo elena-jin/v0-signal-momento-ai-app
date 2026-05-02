@@ -424,15 +424,42 @@ Write like a human who has something real to say, not a content creator followin
     } catch (error) {
       console.error("[v0] Generation error:", error)
       
+      // Extract the real error message - dig through all nested properties
       let errorMessage = "An unexpected error occurred"
-      if (error instanceof Error) {
-        if (error.message.includes("credit card") || error.message.includes("customer_verification")) {
-          errorMessage = "AI Gateway requires billing setup. Add a credit card in your Vercel dashboard."
-        } else if (error.message.includes("rate limit")) {
-          errorMessage = "Rate limit reached. Wait a moment and try again."
-        } else {
-          errorMessage = error.message
+      
+      // Recursively search for credit card error in nested objects
+      const searchForError = (obj: unknown, depth = 0): string | null => {
+        if (depth > 5) return null
+        if (!obj) return null
+        
+        const str = String(obj)
+        if (str.includes("credit card") || str.includes("customer_verification")) {
+          return "credit_card"
         }
+        if (str.includes("rate limit")) {
+          return "rate_limit"
+        }
+        
+        if (typeof obj === 'object') {
+          for (const key of Object.keys(obj as Record<string, unknown>)) {
+            const result = searchForError((obj as Record<string, unknown>)[key], depth + 1)
+            if (result) return result
+          }
+        }
+        return null
+      }
+      
+      const errorType = searchForError(error)
+      
+      if (errorType === "credit_card") {
+        errorMessage = "AI Gateway requires billing setup. Add a credit card in your Vercel dashboard to unlock AI features."
+      } else if (errorType === "rate_limit") {
+        errorMessage = "Rate limit reached. Wait a moment and try again."
+      } else if (error instanceof Error && error.message.includes("No output")) {
+        // This generic error usually means the underlying API call failed
+        errorMessage = "AI Gateway blocked the request. Add a credit card in Vercel settings to enable AI features."
+      } else if (error instanceof Error) {
+        errorMessage = error.message
       }
       
       await emit({ type: "error", message: errorMessage })
