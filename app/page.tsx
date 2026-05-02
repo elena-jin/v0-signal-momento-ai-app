@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { VoiceRecorder } from "@/components/input/voice-recorder"
 import { MediaUpload } from "@/components/input/media-upload"
 import { AgentLog } from "@/components/agent-log/agent-log"
@@ -14,6 +14,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import type { UploadedMedia, VoiceRecording } from "@/lib/types"
 import { Flame, Terminal, AlertCircle, ExternalLink, Zap } from "lucide-react"
+import { YourSignalSidebar } from "@/components/sidebar/your-signal"
 
 export default function SignalPage() {
   const [voice, setVoice] = useState<VoiceRecording | null>(null)
@@ -26,6 +27,15 @@ export default function SignalPage() {
   const isGenerating = status === "streaming"
   const hasContent = status === "complete" && content !== null
   const hasError = status === "error"
+  const prevStatusRef = useRef(status)
+
+  // Dispatch event when generation completes so sidebar refreshes
+  useEffect(() => {
+    if (prevStatusRef.current === "streaming" && status === "complete") {
+      window.dispatchEvent(new Event("signal-generation-complete"))
+    }
+    prevStatusRef.current = status
+  }, [status])
   const canGenerate = (voice !== null || media !== null) && !isGenerating
 
   const handleVoiceRecording = (blob: Blob, duration: number) => {
@@ -60,11 +70,18 @@ export default function SignalPage() {
         </header>
 
         {/* Hero Section */}
-        <main className="flex-1 flex flex-col items-center justify-center p-6">
-          <div className="w-full max-w-4xl space-y-8">
-            {/* Two brutal cards */}
-            <div className="grid md:grid-cols-2 gap-6">
-              {/* Voice Card */}
+        <main className="flex-1 flex p-6 gap-6">
+          {/* Sidebar */}
+          <aside className="hidden lg:block w-64 shrink-0">
+            <YourSignalSidebar />
+          </aside>
+
+          {/* Main content */}
+          <div className="flex-1 flex flex-col items-center justify-center">
+            <div className="w-full max-w-3xl space-y-8">
+              {/* Two brutal cards */}
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Voice Card */}
               <div className="bg-card border-2 border-border rounded-2xl p-8 flex flex-col">
                 <h2 className="text-lg font-semibold mb-2 text-center">Voice</h2>
                 <p className="text-sm text-muted-foreground text-center mb-6">
@@ -96,36 +113,37 @@ export default function SignalPage() {
                   />
                 </div>
               </div>
-            </div>
+              </div>
 
-            {/* Context input */}
-            <div className="max-w-xl mx-auto w-full">
-              <Input
-                value={context}
-                onChange={(e) => setContext(e.target.value)}
-                placeholder="any context? (optional)"
-                className="bg-muted/30 border-border/50 text-center h-12"
-              />
-            </div>
+              {/* Context input */}
+              <div className="max-w-xl mx-auto w-full">
+                <Input
+                  value={context}
+                  onChange={(e) => setContext(e.target.value)}
+                  placeholder="any context? (optional)"
+                  className="bg-muted/30 border-border/50 text-center h-12"
+                />
+              </div>
 
-            {/* Generate button */}
-            <div className="flex justify-center">
-              <Button
-                onClick={handleGenerate}
-                disabled={!canGenerate}
-                size="lg"
-                className="h-14 px-10 text-lg gap-3 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
-              >
-                <Flame className="size-5" />
-                Let Signal cook
-              </Button>
-            </div>
+              {/* Generate button */}
+              <div className="flex justify-center">
+                <Button
+                  onClick={handleGenerate}
+                  disabled={!canGenerate}
+                  size="lg"
+                  className="h-14 px-10 text-lg gap-3 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                >
+                  <Flame className="size-5" />
+                  Let Signal cook
+                </Button>
+              </div>
 
-            {!voice && !media && (
-              <p className="text-xs text-muted-foreground text-center">
-                Record voice or upload media to begin
-              </p>
-            )}
+              {!voice && !media && (
+                <p className="text-xs text-muted-foreground text-center">
+                  Record voice or upload media to begin
+                </p>
+              )}
+            </div>
           </div>
         </main>
       </div>
