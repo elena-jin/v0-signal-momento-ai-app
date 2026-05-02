@@ -13,17 +13,19 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Spinner } from "@/components/ui/spinner"
 import type { UploadedImage } from "@/lib/types"
-import { Sparkles, Instagram, Terminal } from "lucide-react"
+import { Sparkles, Instagram, Terminal, AlertCircle, ExternalLink } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 export default function HomePage() {
   const [images, setImages] = useState<UploadedImage[]>([])
   const [context, setContext] = useState("")
   const [activeTab, setActiveTab] = useState("instagram")
   
-  const { status, logs, content, activeAgent, generate, reset } = useGenerate()
+  const { status, logs, content, activeAgent, error, generate, reset } = useGenerate()
 
   const isGenerating = status === "streaming"
   const hasContent = status === "complete" && content !== null
+  const hasError = status === "error"
   const canGenerate = images.length > 0 && !isGenerating
 
   const handleGenerate = async () => {
@@ -68,7 +70,27 @@ export default function HomePage() {
             />
           </div>
           
-          <div className="p-6 border-t border-border">
+          <div className="p-6 border-t border-border space-y-4">
+            {hasError && error && (
+              <Alert variant="destructive" className="bg-destructive/10 border-destructive/30">
+                <AlertCircle className="size-4" />
+                <AlertTitle>Generation Failed</AlertTitle>
+                <AlertDescription className="mt-2">
+                  {error}
+                  {error.includes("credit card") && (
+                    <a 
+                      href="https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 mt-2 text-sm underline underline-offset-2 hover:text-destructive-foreground"
+                    >
+                      Add billing info to Vercel <ExternalLink className="size-3" />
+                    </a>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+            
             {hasContent ? (
               <div className="flex gap-3">
                 <Button 

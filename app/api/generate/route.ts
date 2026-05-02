@@ -1,5 +1,5 @@
-import { streamText, Output, wrapLanguageModel, extractReasoningMiddleware } from "ai"
-import { mubitMemory } from "@mubit-ai/ai-sdk"
+import { streamText, Output, wrapLanguageModel } from "ai"
+import { mubitMemoryMiddleware } from "@mubit-ai/ai-sdk"
 import { z } from "zod"
 import type { StreamEvent, VisionAnalysis, NarrativeOutput, TrendOutput, GeneratedContent } from "@/lib/types"
 
@@ -81,9 +81,9 @@ function createMemoryModel() {
   if (process.env.MUBIT_API_KEY) {
     return wrapLanguageModel({
       model: baseModel,
-      middleware: mubitMemory({
+      middleware: mubitMemoryMiddleware({
         apiKey: process.env.MUBIT_API_KEY,
-        agentId: "momento-content-agent"
+        sessionId: "momento-content-agent"
       })
     })
   }
