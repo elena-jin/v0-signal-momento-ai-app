@@ -1,7 +1,9 @@
-import { streamText, Output } from "ai"
+import { streamText, Output, wrapLanguageModel, extractReasoningMiddleware } from "ai"
+import { mubitMemory } from "@mubit-ai/ai-sdk"
 import { z } from "zod"
-import type { StreamEvent, VisionAnalysis, NarrativeOutput, GeneratedContent } from "@/lib/types"
+import type { StreamEvent, VisionAnalysis, NarrativeOutput, TrendOutput, GeneratedContent } from "@/lib/types"
 
+// Schemas for structured output
 const VisionSchema = z.object({
   images: z.array(z.object({
     index: z.number(),
@@ -14,7 +16,8 @@ const VisionSchema = z.object({
     emotionalTone: z.string()
   })),
   overallTheme: z.string(),
-  suggestedNarrative: z.string()
+  suggestedNarrative: z.string(),
+  contentCategory: z.string() // For trend agent
 })
 
 const NarrativeSchema = z.object({
@@ -24,6 +27,14 @@ const NarrativeSchema = z.object({
   tone: z.enum(["playful", "inspirational", "reflective", "energetic", "intimate"]),
   hooks: z.array(z.string()),
   callToAction: z.string()
+})
+
+const TrendSchema = z.object({
+  category: z.string(),
+  trendingHashtags: z.array(z.string()),
+  recommendedHashtags: z.array(z.string()),
+  trendScore: z.number(),
+  insights: z.string()
 })
 
 const CopySchema = z.object({
@@ -62,6 +73,81 @@ const FormatSchema = z.object({
   }))
 })
 
+// Create model with Mubit memory middleware
+function createMemoryModel() {
+  const baseModel = "anthropic/claude-sonnet-4-20250514"
+  
+  // Only wrap with Mubit if API key is available
+  if (process.env.MUBIT_API_KEY) {
+    return wrapLanguageModel({
+      model: baseModel,
+      middleware: mubitMemory({
+        apiKey: process.env.MUBIT_API_KEY,
+        agentId: "momento-content-agent"
+      })
+    })
+  }
+  
+  return baseModel
+}
+
+// Fetch trending hashtags from Bright Data
+async function fetchTrendingHashtags(category: string, emit: (event: StreamEvent) => Promise<void>): Promise<string[]> {
+  const apiKey = process.env.BRIGHT_DATA_API_KEY
+  
+  if (!apiKey) {
+    await emit({ type: "agent_thinking", agent: "trend", message: "Bright Data API key not configured, using AI-generated trends..." })
+    return []
+  }
+  
+  try {
+    await emit({ type: "agent_thinking", agent: "trend", message: `Fetching real-time trends for "${category}"...` })
+    
+    // Call Bright Data's Social Media API for trending hashtags
+    // Using Instagram hashtag discovery endpoint
+    const response = await fetch("https://api.brightdata.com/datasets/v3/trigger", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        dataset_id: "gd_lyclg6rwlk1vfnl81", // Instagram hashtag dataset
+        endpoint: "/hashtag/discover",
+        input: [{ keyword: category }],
+        format: "json",
+        limit: 20
+      })
+    })
+    
+    if (!response.ok) {
+      await emit({ type: "agent_thinking", agent: "trend", message: "API request failed, falling back to AI trends..." })
+      return []
+    }
+    
+    const data = await response.json()
+    
+    // Extract hashtags from Bright Data response
+    if (data && Array.isArray(data.results)) {
+      const hashtags = data.results
+        .filter((item: { hashtag?: string }) => item.hashtag)
+        .map((item: { hashtag: string }) => item.hashtag)
+        .slice(0, 15)
+      
+      if (hashtags.length > 0) {
+        await emit({ type: "agent_thinking", agent: "trend", message: `Found ${hashtags.length} trending hashtags from Bright Data` })
+        return hashtags
+      }
+    }
+    
+    return []
+  } catch (error) {
+    console.error("[v0] Bright Data API error:", error)
+    await emit({ type: "agent_thinking", agent: "trend", message: "Error fetching trends, using AI-generated trends..." })
+    return []
+  }
+}
+
 export async function POST(req: Request) {
   const { images, context } = await req.json() as {
     images: Array<{ data: string; type: string; name: string }>
@@ -77,6 +163,7 @@ export async function POST(req: Request) {
   }
 
   const startTime = Date.now()
+  const model = createMemoryModel()
 
   ;(async () => {
     try {
@@ -86,7 +173,7 @@ export async function POST(req: Request) {
       
       const visionStart = Date.now()
       
-      const imageContents = images.map((img, idx) => ({
+      const imageContents = images.map((img) => ({
         type: "image" as const,
         image: img.data,
         mimeType: img.type
@@ -95,7 +182,7 @@ export async function POST(req: Request) {
       await emit({ type: "agent_thinking", agent: "vision", message: `Processing ${images.length} image${images.length > 1 ? 's' : ''}...` })
 
       const visionResult = await streamText({
-        model: "anthropic/claude-sonnet-4-20250514",
+        model,
         messages: [
           {
             role: "user",
@@ -103,7 +190,7 @@ export async function POST(req: Request) {
               ...imageContents,
               {
                 type: "text",
-                text: `You are the Vision Agent. Analyze the provided ${images.length} image(s) with extreme attention to detail.
+                text: `You are the Vision Agent for Momento, an AI content creation system. Analyze the provided ${images.length} image(s) with extreme attention to detail.
                 
 Extract for each image:
 - Description: A detailed description of what's in the image
@@ -117,6 +204,7 @@ Extract for each image:
 Also determine:
 - Overall Theme: A unifying theme across all images
 - Suggested Narrative: A brief story that connects the images
+- Content Category: A single-word category for trend research (e.g., "travel", "food", "fitness", "fashion", "lifestyle", "nature", "tech", "art")
 
 ${context ? `User provided context: "${context}"` : "No additional context provided."}
 
@@ -128,7 +216,7 @@ Return your analysis as structured JSON.`
         output: Output.object({ schema: VisionSchema })
       })
       
-      let visionOutput: VisionAnalysis | null = null
+      let visionOutput: VisionAnalysis & { contentCategory: string } | null = null
       for await (const chunk of visionResult.partialOutputStream) {
         if (chunk && typeof chunk === 'object' && 'images' in chunk) {
           const img = chunk.images?.[0]
@@ -143,7 +231,7 @@ Return your analysis as structured JSON.`
       }
       
       const finalVision = await visionResult.output
-      visionOutput = finalVision as VisionAnalysis
+      visionOutput = finalVision as VisionAnalysis & { contentCategory: string }
       
       await emit({ type: "agent_output", agent: "vision", output: visionOutput })
       await emit({ type: "agent_complete", agent: "vision", duration: Date.now() - visionStart })
@@ -155,11 +243,11 @@ Return your analysis as structured JSON.`
       const narrativeStart = Date.now()
 
       const narrativeResult = await streamText({
-        model: "anthropic/claude-sonnet-4-20250514",
+        model,
         messages: [
           {
             role: "user",
-            content: `You are the Narrative Agent. Using the following visual analysis, construct a compelling story arc.
+            content: `You are the Narrative Agent for Momento. Using the following visual analysis, construct a compelling story arc.
 
 Visual Analysis:
 ${JSON.stringify(visionOutput, null, 2)}
@@ -206,20 +294,85 @@ Return structured JSON.`
       await emit({ type: "agent_output", agent: "narrative", output: narrativeOutput })
       await emit({ type: "agent_complete", agent: "narrative", duration: Date.now() - narrativeStart })
 
+      // ====== TREND AGENT ======
+      await emit({ type: "agent_start", agent: "trend", timestamp: new Date().toISOString() })
+      await emit({ type: "agent_thinking", agent: "trend", message: `Researching trends for category: ${visionOutput.contentCategory}...` })
+      
+      const trendStart = Date.now()
+      
+      // Fetch real trending hashtags from Bright Data
+      const realTrendingHashtags = await fetchTrendingHashtags(visionOutput.contentCategory, emit)
+      
+      // Use AI to analyze and recommend hashtags based on real data + content
+      const trendResult = await streamText({
+        model,
+        messages: [
+          {
+            role: "user",
+            content: `You are the Trend Agent for Momento. Analyze current social media trends for the content category and recommend hashtags.
+
+Content Category: ${visionOutput.contentCategory}
+Overall Theme: ${visionOutput.overallTheme}
+Key Themes: ${narrativeOutput.keyThemes.join(', ')}
+Tone: ${narrativeOutput.tone}
+
+${realTrendingHashtags.length > 0 
+  ? `Real-time trending hashtags from social media APIs:\n${realTrendingHashtags.map(h => `#${h}`).join(' ')}\n\nUse these ACTUAL trending hashtags as your primary recommendations.` 
+  : `No real-time data available. Generate hashtag recommendations based on current social media best practices for ${visionOutput.contentCategory} content.`}
+
+Return:
+- category: The content category
+- trendingHashtags: ${realTrendingHashtags.length > 0 ? 'The actual trending hashtags provided above' : '10-15 currently popular hashtags for this category'}
+- recommendedHashtags: 5-8 hashtags specifically tailored to THIS content combining trends with the unique themes
+- trendScore: A score from 1-100 indicating how trendy/timely this content is
+- insights: A brief insight about why these hashtags will perform well
+
+Return structured JSON.`
+          }
+        ],
+        output: Output.object({ schema: TrendSchema })
+      })
+      
+      let trendOutput: TrendOutput | null = null
+      for await (const chunk of trendResult.partialOutputStream) {
+        if (chunk && typeof chunk === 'object') {
+          if ('trendingHashtags' in chunk && Array.isArray(chunk.trendingHashtags) && chunk.trendingHashtags.length > 0) {
+            await emit({ 
+              type: "agent_thinking", 
+              agent: "trend", 
+              message: `Found ${chunk.trendingHashtags.length} trending hashtags` 
+            })
+          }
+          if ('trendScore' in chunk && typeof chunk.trendScore === 'number') {
+            await emit({ 
+              type: "agent_thinking", 
+              agent: "trend", 
+              message: `Trend score: ${chunk.trendScore}/100` 
+            })
+          }
+        }
+      }
+      
+      const finalTrend = await trendResult.output
+      trendOutput = finalTrend as TrendOutput
+      
+      await emit({ type: "agent_output", agent: "trend", output: trendOutput })
+      await emit({ type: "agent_complete", agent: "trend", duration: Date.now() - trendStart })
+
       // ====== COPY AGENT ======
       await emit({ type: "agent_start", agent: "copy", timestamp: new Date().toISOString() })
-      await emit({ type: "agent_thinking", agent: "copy", message: "Generating platform-specific content..." })
+      await emit({ type: "agent_thinking", agent: "copy", message: "Generating platform-specific content with trending hashtags..." })
       
       const copyStart = Date.now()
 
       await emit({ type: "agent_thinking", agent: "copy", message: "Writing Instagram caption..." })
       
       const copyResult = await streamText({
-        model: "anthropic/claude-sonnet-4-20250514",
+        model,
         messages: [
           {
             role: "user",
-            content: `You are the Copy Agent, a world-class social media copywriter.
+            content: `You are the Copy Agent for Momento, a world-class social media copywriter.
 
 Visual Analysis:
 ${JSON.stringify(visionOutput, null, 2)}
@@ -227,11 +380,15 @@ ${JSON.stringify(visionOutput, null, 2)}
 Narrative Direction:
 ${JSON.stringify(narrativeOutput, null, 2)}
 
+Trend Research:
+${JSON.stringify(trendOutput, null, 2)}
+
 Generate platform-optimized content:
 
 INSTAGRAM:
 - Engaging caption (hook in first line, conversational, strategic line breaks)
-- 5-10 relevant hashtags (mix of popular and niche)
+- Use the RECOMMENDED hashtags from the Trend Agent: ${trendOutput.recommendedHashtags.map(h => `#${h}`).join(' ')}
+- Add 3-5 more hashtags from the trending list that fit naturally
 
 TWITTER THREAD:
 - Exactly 5 tweets
@@ -239,6 +396,7 @@ TWITTER THREAD:
 - Each tweet standalone but connected
 - Build narrative momentum
 - Stay under 280 chars per tweet
+- Include 1-2 relevant hashtags per tweet from the trend research
 
 STORIES:
 - One caption per image (${images.length} total)
@@ -280,11 +438,11 @@ Return structured JSON.`
       const formatStart = Date.now()
 
       const formatResult = await streamText({
-        model: "anthropic/claude-sonnet-4-20250514",
+        model,
         messages: [
           {
             role: "user",
-            content: `You are the Format Agent. Structure the generated copy into final deliverables.
+            content: `You are the Format Agent for Momento. Structure the generated copy into final deliverables.
 
 Raw Copy:
 ${JSON.stringify(copyOutput, null, 2)}
@@ -327,10 +485,25 @@ Return structured JSON.`
       await emit({ type: "complete", result })
 
     } catch (error) {
-      console.error("Generation error:", error)
+      console.error("[v0] Generation error:", error)
+      
+      // Provide more helpful error messages
+      let errorMessage = "An unexpected error occurred"
+      if (error instanceof Error) {
+        if (error.message.includes("credit card") || error.message.includes("customer_verification")) {
+          errorMessage = "AI Gateway requires billing setup. Please add a credit card in your Vercel dashboard to unlock AI features."
+        } else if (error.message.includes("MUBIT_API_KEY")) {
+          errorMessage = "Mubit memory is not configured. Set MUBIT_API_KEY in your environment variables."
+        } else if (error.message.includes("rate limit")) {
+          errorMessage = "Rate limit reached. Please wait a moment and try again."
+        } else {
+          errorMessage = error.message
+        }
+      }
+      
       await emit({ 
         type: "error", 
-        message: error instanceof Error ? error.message : "An unexpected error occurred" 
+        message: errorMessage 
       })
     } finally {
       await writer.close()

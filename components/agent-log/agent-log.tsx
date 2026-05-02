@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { LogEntry, AgentName } from "@/lib/types"
-import { Search, BookOpen, Pen, Layout, Check, Loader2, AlertCircle } from "lucide-react"
+import { Search, BookOpen, Pen, Layout, Check, Loader2, AlertCircle, TrendingUp } from "lucide-react"
 
 interface AgentLogProps {
   entries: LogEntry[]
@@ -26,6 +26,11 @@ const agentConfig: Record<AgentName, {
     icon: BookOpen, 
     label: "NARRATIVE AGENT",
     colorClass: "text-agent-narrative"
+  },
+  trend: {
+    icon: TrendingUp,
+    label: "TREND AGENT",
+    colorClass: "text-amber-500"
   },
   copy: { 
     icon: Pen, 

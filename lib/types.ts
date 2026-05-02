@@ -1,4 +1,4 @@
-export type AgentName = "vision" | "narrative" | "copy" | "format"
+export type AgentName = "vision" | "narrative" | "trend" | "copy" | "format"
 
 export interface UploadedImage {
   id: string
@@ -39,6 +39,14 @@ export interface NarrativeOutput {
   tone: "playful" | "inspirational" | "reflective" | "energetic" | "intimate"
   hooks: string[]
   callToAction: string
+}
+
+export interface TrendOutput {
+  category: string
+  trendingHashtags: string[]
+  recommendedHashtags: string[]
+  trendScore: number
+  insights: string
 }
 
 export interface CopyOutput {
